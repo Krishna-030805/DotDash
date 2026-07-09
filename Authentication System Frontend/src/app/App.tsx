@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 type Page = "welcome" | "login" | "register";
+export type RhythmData = { presses: number[], gaps: number[] };
 
 const MORSE: Record<string, string> = {
   A: ".-", B: "-...", C: "-.-.", D: "-..", E: ".", F: "..-.", G: "--.",
@@ -164,15 +165,20 @@ function MorseTapInput({
   label,
   value,
   onChange,
+  onRhythmChange,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onRhythmChange?: (rhythm: RhythmData) => void;
 }) {
   const [currentSymbols, setCurrentSymbols] = useState(""); // dots/dashes in progress
   const [pressing, setPressing] = useState(false);
   const [lastAction, setLastAction] = useState<"dot" | "dash" | null>(null);
   const pressStart = useRef(0);
+  const lastPressEnd = useRef(0);
+  const presses = useRef<number[]>([]);
+  const gaps = useRef<number[]>([]);
   const letterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const DOT_THRESHOLD = 300; // ms — under = dot, over = dash
   const LETTER_DELAY = 750;  // ms after last tap to commit letter
@@ -198,25 +204,34 @@ function MorseTapInput({
     [commitLetter]
   );
 
-  const handlePressStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handlePressStart = useCallback((e: React.MouseEvent | React.TouchEvent | any) => {
     e.preventDefault();
     if (letterTimer.current) clearTimeout(letterTimer.current);
+    if (lastPressEnd.current > 0) {
+      gaps.current.push(Date.now() - lastPressEnd.current);
+    }
     pressStart.current = Date.now();
     setPressing(true);
   }, []);
 
   const handlePressEnd = useCallback(
-    (e: React.MouseEvent | React.TouchEvent) => {
+    (e: React.MouseEvent | React.TouchEvent | any) => {
       e.preventDefault();
       const duration = Date.now() - pressStart.current;
+      presses.current.push(duration);
+      lastPressEnd.current = Date.now();
+      
       const symbol = duration < DOT_THRESHOLD ? "." : "-";
       setLastAction(symbol === "." ? "dot" : "dash");
       setPressing(false);
       const next = currentSymbols + symbol;
       setCurrentSymbols(next);
       scheduleCommit(next);
+      if (onRhythmChange) {
+        onRhythmChange({ presses: [...presses.current], gaps: [...gaps.current] });
+      }
     },
-    [currentSymbols, scheduleCommit]
+    [currentSymbols, scheduleCommit, onRhythmChange]
   );
 
   const handleBackspace = () => {
@@ -229,44 +244,17 @@ function MorseTapInput({
     if (letterTimer.current) clearTimeout(letterTimer.current);
     setCurrentSymbols("");
     onChange("");
+    presses.current = [];
+    gaps.current = [];
+    lastPressEnd.current = 0;
+    if (onRhythmChange) onRhythmChange({ presses: [], gaps: [] });
   };
 
   useEffect(() => {
     return () => { if (letterTimer.current) clearTimeout(letterTimer.current); };
   }, []);
 
-  // Keyboard support: space = tap
-  useEffect(() => {
-    let kStart = 0;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !e.repeat) {
-        e.preventDefault();
-        if (letterTimer.current) clearTimeout(letterTimer.current);
-        kStart = Date.now();
-        setPressing(true);
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        e.preventDefault();
-        const duration = Date.now() - kStart;
-        const symbol = duration < DOT_THRESHOLD ? "." : "-";
-        setLastAction(symbol === "." ? "dot" : "dash");
-        setPressing(false);
-        setCurrentSymbols((prev) => {
-          const next = prev + symbol;
-          scheduleCommit(next);
-          return next;
-        });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-    };
-  }, [scheduleCommit]);
+  // Keyboard support: space = tap (handled via onKeyDown/onKeyUp on the button itself now)
 
   const charCount = value.length;
 
@@ -318,6 +306,18 @@ function MorseTapInput({
         onMouseLeave={(e) => { if (pressing) handlePressEnd(e); }}
         onTouchStart={handlePressStart}
         onTouchEnd={handlePressEnd}
+        onKeyDown={(e) => {
+          if (e.code === "Space" && !e.repeat) {
+            e.preventDefault();
+            handlePressStart(e as any);
+          }
+        }}
+        onKeyUp={(e) => {
+          if (e.code === "Space") {
+            e.preventDefault();
+            handlePressEnd(e as any);
+          }
+        }}
         className="w-full py-5 font-mono font-bold text-sm tracking-[0.3em] uppercase border select-none transition-colors duration-75"
         style={{
           fontFamily: "'JetBrains Mono', monospace",
@@ -526,24 +526,55 @@ function MorseSymbolInput({
 
 // ─── STATUS BAR ────────────────────────────────────────────────────────────────
 
-function StatusBar({ status }: { status: "loading" | "success" | "error" | null }) {
+function StatusBar({ status, details }: { status: "loading" | "success" | "error" | null, details?: any }) {
   if (!status) return null;
   return (
-    <div
-      className={`font-mono text-xs tracking-widest px-3 py-2 border ${
-        status === "loading" ? "border-muted-foreground text-muted-foreground"
-        : status === "success" ? "border-primary text-primary"
-        : "border-destructive text-destructive"
-      }`}
-      style={{
-        boxShadow: status === "success" ? "0 0 10px rgba(0,168,255,0.3)"
-          : status === "error" ? "0 0 10px rgba(255,51,51,0.3)" : "none",
-        animation: "fadeSlideUp 0.3s ease both",
-      }}
-    >
-      {status === "loading" && "▶ AUTHENTICATING SIGNAL..."}
-      {status === "success" && "✓ ACCESS GRANTED · WELCOME OPERATOR"}
-      {status === "error" && "✗ INVALID CREDENTIALS · SIGNAL REJECTED"}
+    <div className="flex flex-col gap-2 w-full animate-fade-in" style={{ animation: "fadeSlideUp 0.3s ease both" }}>
+      <div
+        className={`font-mono text-xs tracking-widest px-3 py-2 border flex items-center justify-between ${
+          status === "loading" ? "border-muted-foreground text-muted-foreground"
+          : status === "success" ? "border-primary text-primary"
+          : "border-destructive text-destructive"
+        }`}
+        style={{
+          boxShadow: status === "success" ? "0 0 10px rgba(0,168,255,0.3)"
+            : status === "error" ? "0 0 10px rgba(255,51,51,0.3)" : "none",
+        }}
+      >
+        <span>
+          {status === "loading" && "▶ AUTHENTICATING SIGNAL..."}
+          {status === "success" && "✓ ACCESS GRANTED"}
+          {status === "error" && "✗ INVALID CREDENTIALS"}
+        </span>
+        {details && (
+          <span className="font-bold opacity-80">
+            VOTES: {details.votes}
+          </span>
+        )}
+      </div>
+      
+      {details && status !== "loading" && (
+        <div className="flex flex-col gap-1 p-2 border border-border bg-black/40 text-[10px] font-mono text-muted-foreground">
+          <div className="flex justify-between border-b border-border/50 pb-1 mb-1 text-primary">
+            <span>MODEL</span>
+            <span>STATUS</span>
+            <span>CONFIDENCE</span>
+          </div>
+          {["euclidean", "manhattan", "dtw", "svm"].map((m) => (
+            details[m] && (
+              <div key={m} className="flex justify-between">
+                <span className="uppercase w-24">{m}</span>
+                <span className={details[m].accepted ? "text-primary" : "text-destructive"}>
+                  {details[m].accepted ? "PASS" : "FAIL"}
+                </span>
+                <span className="w-16 text-right">
+                  {(details[m].confidence * 100).toFixed(0)}%
+                </span>
+              </div>
+            )
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -665,15 +696,42 @@ function WelcomePage({ navigate }: { navigate: (p: Page) => void }) {
 function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [rhythm, setRhythm] = useState<RhythmData | null>(null);
   const [status, setStatus] = useState<null | "loading" | "success" | "error">(null);
+  const [authDetails, setAuthDetails] = useState<any>(null);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!username || !password || !rhythm) return;
     setStatus("loading");
-    setTimeout(() => {
-      setStatus(username && password ? "success" : "error");
-      setTimeout(() => setStatus(null), 2500);
-    }, 1200);
+    setAuthDetails(null);
+    
+    try {
+      const res = await fetch("http://localhost:5000/api/authenticate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: username.toLowerCase(),
+          attempt: rhythm
+        })
+      });
+      const data = await res.json();
+      
+      if (data.results) {
+        setAuthDetails(data.results);
+      }
+      
+      if (data.status === "success" && data.final_decision) {
+        setStatus("success");
+      } else {
+        setStatus("error");
+      }
+      setTimeout(() => { setStatus(null); setAuthDetails(null); }, 6000); // Wait longer so they can read details
+    } catch (err) {
+      console.error(err);
+      setStatus("error");
+      setTimeout(() => setStatus(null), 3000);
+    }
   }
 
   return (
@@ -716,11 +774,12 @@ function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
               label="Password"
               value={password}
               onChange={setPassword}
+              onRhythmChange={setRhythm}
             />
-            <StatusBar status={status} />
+            <StatusBar status={status} details={authDetails} />
             <button
               type="submit"
-              disabled={status === "loading"}
+              disabled={status === "loading" || !password || !username}
               className="w-full py-4 font-mono font-bold text-sm tracking-[0.25em] uppercase text-primary-foreground bg-primary border border-primary transition-all duration-200 hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed mt-1"
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
@@ -753,24 +812,56 @@ function LoginPage({ navigate }: { navigate: (p: Page) => void }) {
 
 function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [morseKey, setMorseKey] = useState("");   // decoded from symbol input
+  const [username, setUsername] = useState("");
+  const [morseKey, setMorseKey] = useState("");   
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [thirdPassword, setThirdPassword] = useState("");
+  
+  const [rhythm1, setRhythm1] = useState<RhythmData | null>(null);
+  const [rhythm2, setRhythm2] = useState<RhythmData | null>(null);
+  const [rhythm3, setRhythm3] = useState<RhythmData | null>(null);
+  
   const [status, setStatus] = useState<null | "loading" | "success" | "error">(null);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password !== confirmPassword) {
+    
+    const r1Valid = rhythm1 && rhythm1.presses.length > 0;
+    const r2Valid = rhythm2 && rhythm2.presses.length > 0;
+    const r3Valid = rhythm3 && rhythm3.presses.length > 0;
+    
+    if (!username || !r1Valid || !r2Valid || !r3Valid) {
       setStatus("error");
       setTimeout(() => setStatus(null), 2500);
       return;
     }
     setStatus("loading");
-    setTimeout(() => {
-      setStatus("success");
+    
+    try {
+      const res = await fetch("http://localhost:5000/api/enroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: username.toLowerCase(),
+          decoded_word: password,
+          samples: [rhythm1, rhythm2, rhythm3]
+        })
+      });
+      const data = await res.json();
+      
+      if (data.status === "success") {
+        setStatus("success");
+        setTimeout(() => setStatus(null), 2500);
+      } else {
+        setStatus("error");
+        setTimeout(() => setStatus(null), 2500);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("error");
       setTimeout(() => setStatus(null), 2500);
-    }, 1400);
+    }
   }
 
   return (
@@ -778,7 +869,6 @@ function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
       className="min-h-screen flex flex-col items-center justify-center px-6 py-12 pb-20 relative"
       style={{ animation: "terminalIn 0.5s ease both" }}
     >
-      {/* Grid background — same as welcome page */}
       <div className="absolute inset-0 pointer-events-none" style={{
         backgroundImage: "linear-gradient(rgba(0,168,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,168,255,0.04) 1px, transparent 1px)",
         backgroundSize: "60px 60px",
@@ -804,23 +894,14 @@ function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
         <TerminalCard subtitle="morseauth · register · v2.4.1">
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <Field
-              label="Full Name"
+              label="Username"
               type="text"
-              placeholder="Ada Lovelace"
-              morseLabel={toMorse("NAME")}
-              value={name}
-              onChange={setName}
-            />
-            <Field
-              label="Email Address"
-              type="email"
-              placeholder="operator@signal.net"
-              morseLabel={toMorse("EMAIL")}
-              value={email}
-              onChange={setEmail}
+              placeholder="operator_callsign"
+              morseLabel={toMorse("USER")}
+              value={username}
+              onChange={setUsername}
             />
 
-            {/* Step 1: Morse symbol input — type . and - directly */}
             <div className="border-t border-border pt-4">
               <div className="flex items-center gap-2 mb-3">
                 <span className="font-mono text-[10px] text-primary tracking-widest uppercase">Step 1 · Morse Code Key</span>
@@ -833,30 +914,41 @@ function RegisterPage({ navigate }: { navigate: (p: Page) => void }) {
               />
             </div>
 
-            {/* Step 2 & 3: Tap password + confirm */}
             <div className="border-t border-border pt-4 flex flex-col gap-5">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[10px] text-primary tracking-widest uppercase">Step 2 · Tap Password</span>
                 <div className="flex-1 h-px bg-border" />
               </div>
               <MorseTapInput
-                label="Password"
+                label="Sample 1"
                 value={password}
                 onChange={setPassword}
+                onRhythmChange={setRhythm1}
               />
               <MorseTapInput
-                label="Confirm Password"
+                label="Sample 2"
                 value={confirmPassword}
                 onChange={setConfirmPassword}
+                onRhythmChange={setRhythm2}
               />
-              {confirmPassword.length > 0 && (
-                <div
-                  className="font-mono text-[10px] tracking-widest -mt-3"
-                  style={{ color: confirmPassword === password ? "#00a8ff" : "#ff3333" }}
-                >
-                  {confirmPassword === password ? "✓ PASSWORDS MATCH" : "✗ MISMATCH"}
-                </div>
-              )}
+              <MorseTapInput
+                label="Sample 3"
+                value={thirdPassword}
+                onChange={setThirdPassword}
+                onRhythmChange={setRhythm3}
+              />
+              {/* Show how many rhythm samples have been collected */}
+              {(rhythm1 || rhythm2 || rhythm3) && (() => {
+                const collected = [rhythm1, rhythm2, rhythm3].filter(r => r && r.presses.length > 0).length;
+                return (
+                  <div
+                    className="font-mono text-[10px] tracking-widest -mt-3"
+                    style={{ color: collected === 3 ? "#00a8ff" : "#ffb300" }}
+                  >
+                    {collected === 3 ? "✓ ALL 3 SAMPLES RECORDED" : `${collected}/3 SAMPLES RECORDED`}
+                  </div>
+                );
+              })()}
             </div>
 
             <StatusBar status={status} />

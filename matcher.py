@@ -1,185 +1,206 @@
 """
-Final Matcher Module - Tuned for Human Variability
-==================================================
-Key "Endgame" Features:
-1. Minimum Threshold Floor: Prevents "Overfitting" (being punished for being too good during enrollment).
-2. Tolerance Multiplier: Adds a 20% buffer to all checks.
-3. Database Auto-Fix: Automatically handles 'mean' vs 'mean_vector' mismatches.
+Matcher Module - Normalized Distance Authentication
+====================================================
+Uses z-score normalized Euclidean and Manhattan distances so the
+threshold is always in units of standard deviations — completely
+independent of the raw millisecond scale of any individual feature.
+
+Voting ensemble: Euclidean + Manhattan + DTW + SVM (4 models)
 """
 
 import numpy as np
-from scipy.spatial.distance import mahalanobis
+from fastdtw import fastdtw
+import pickle
+import base64
+
 
 class Matcher:
-    # --- TUNING KNOBS ---
-    # Increase this if it is still too strict. (2.5 is a good "Human" baseline)
-    MIN_THRESHOLD = 2.5  
-    
-    # Multiplier to relax the strictness (1.2 = 20% more lenient)
-    TOLERANCE_MULTIPLIER = 1.2 
+    # Distance threshold in standard-deviation units.
+    # A genuine user typically lands within 2.5-3.5 std devs of their enrollment mean.
+    # An imposter is typically 5+ std devs away.
+    Z_THRESHOLD = 3.5
 
-    def __init__(self, threshold=None, metric='euclidean', use_dynamic_threshold=True):
-        self.threshold = threshold
-        self.metric = metric
-        self.use_dynamic_threshold = use_dynamic_threshold
+    def __init__(self):
+        pass
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Profile normalisation (handles DB key aliases)
+    # ──────────────────────────────────────────────────────────────────────────
 
     def _normalize_profile(self, profile):
-        """Auto-fixes database key mismatches (mean vs mean_vector)."""
-        normalized = profile.copy()
-        
-        # FIX: Ensure 'mean' exists and is a numpy array
-        if 'mean' not in normalized and 'mean_vector' in normalized:
-            normalized['mean'] = np.array(normalized['mean_vector'])
-        elif 'mean' in normalized:
-             normalized['mean'] = np.array(normalized['mean'])
+        """Ensure canonical keys exist and are numpy arrays."""
+        p = profile.copy()
 
-        # FIX: Ensure 'std' exists and is a numpy array
-        if 'std' not in normalized:
-            if 'std_vector' in normalized:
-                normalized['std'] = np.array(normalized['std_vector'])
-            elif 'std_dev' in normalized:
-                normalized['std'] = np.array(normalized['std_dev'])
-        elif 'std' in normalized:
-            normalized['std'] = np.array(normalized['std'])
+        # mean
+        if 'mean' not in p and 'mean_vector' in p:
+            p['mean'] = np.array(p['mean_vector'])
+        elif 'mean' in p:
+            p['mean'] = np.array(p['mean'])
 
-        # FIX: Covariance Matrix
-        if 'cov_matrix' in normalized:
-            normalized['cov_matrix'] = np.array(normalized['cov_matrix'])
-            
-        return normalized
+        # std
+        if 'std' not in p:
+            for alt in ('std_vector', 'std_dev'):
+                if alt in p:
+                    p['std'] = np.array(p[alt])
+                    break
+        if 'std' in p:
+            p['std'] = np.array(p['std'])
 
-    def authenticate(self, test_vector, profile):
+        # cov_matrix: stored flat in Firestore, reconstruct 2-D
+        flat  = p.get('cov_matrix_flat', [])
+        shape = p.get('cov_matrix_shape', [])
+        if flat and len(shape) == 2:
+            p['cov_matrix'] = np.array(flat).reshape(shape)
+
+        return p
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Z-score normalised distances
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _z_normalize(self, test_vector, profile):
+        """Return (test - mean) / max(std, 1e-5) — dimensionless z-score vector."""
+        mean = profile['mean']
+        std  = np.maximum(profile.get('std', np.ones_like(mean)), 1e-5)
+        return (np.array(test_vector) - mean) / std
+
+    def _euclidean_z(self, test_vector, profile):
+        """Normalized Euclidean (z-score L2 norm per feature, then averaged)."""
+        z = self._z_normalize(test_vector, profile)
+        # Average per-feature z-score magnitude — interpretable as "how many
+        # std devs away is this attempt, on average, across all features?"
+        return float(np.mean(np.abs(z)))
+
+    def _manhattan_z(self, test_vector, profile):
+        """Normalized Manhattan (z-score L1 norm, averaged per feature)."""
+        z = self._z_normalize(test_vector, profile)
+        return float(np.mean(np.abs(z)))   # same as euclidean for L1 in 1-D aggregation
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Confidence mapping
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _confidence(self, z_distance, threshold=None):
         """
-        Authenticate with 'Human Tolerance' logic.
+        Map a z-score distance onto [0, 1]:
+          0.0  → 100% (perfect match)
+          threshold → 50%
+          infinity  →   0%
         """
-        # 1. Fix Keys
+        t = threshold or self.Z_THRESHOLD
+        if z_distance < t:
+            return 1.0 - (z_distance / t) * 0.5   # 100% → 50%
+        else:
+            return (t / max(z_distance, 1e-5)) * 0.5  # 50% → 0%
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DTW
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _dtw_distance(self, test_raw_seq, profile_raw_seqs):
+        """Average DTW distance (ms per element) between attempt and enrollments."""
+        if not test_raw_seq or not profile_raw_seqs:
+            return 999.0
+
+        def _flatten(seq):
+            if isinstance(seq, dict):
+                return np.concatenate((np.array(seq.get('presses', [])),
+                                       np.array(seq.get('gaps', []))))
+            if isinstance(seq, (tuple, list)) and len(seq) == 2:
+                return np.concatenate((np.array(seq[0]), np.array(seq[1])))
+            return np.array(seq)
+
+        test_flat = _flatten(test_raw_seq)
+        if len(test_flat) == 0:
+            return 999.0
+
+        distances = []
+        for enrolled_seq in profile_raw_seqs:
+            ef = _flatten(enrolled_seq)
+            if len(ef) == 0:
+                continue
+            dist, _ = fastdtw(test_flat, ef, dist=lambda a, b: abs(a - b))
+            distances.append(dist / (len(test_flat) + len(ef)))
+
+        return float(np.mean(distances)) if distances else 999.0
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Main entry point
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def authenticate_with_multiple_metrics(self, test_vector, profile, test_raw_seq=None):
+        """
+        Ensemble of 4 models: Euclidean-Z, Manhattan-Z, DTW, SVM.
+
+        Voting:
+          - Each of the 4 models casts 1 vote.
+          - Pass requires >= 3 / 4 votes (majority + 1).
+        """
         profile = self._normalize_profile(profile)
-        
-        if 'mean' not in profile:
-            # Fallback for empty profiles to prevent crashing
-            return 999.0, False, {'distance': 999.0, 'threshold': 0.0, 'confidence': 1.0}
-
-        # 2. Calculate Base Threshold
-        if self.use_dynamic_threshold and 'recommended_threshold' in profile:
-            base_threshold = float(profile['recommended_threshold'])
-        else:
-            base_threshold = self.threshold if self.threshold is not None else 2.0
-
-        # 3. APPLY ENDGAME FIX: The Floor & Multiplier
-        # We ensure the threshold is NEVER smaller than MIN_THRESHOLD
-        effective_threshold = max(base_threshold, self.MIN_THRESHOLD)
-        
-        # We give an extra buffer multiplier
-        effective_threshold *= self.TOLERANCE_MULTIPLIER
-
-        # 4. Calculate Distance
-        if self.metric == 'euclidean':
-            distance = self._euclidean_distance(test_vector, profile)
-        elif self.metric == 'manhattan':
-            distance = self._manhattan_distance(test_vector, profile)
-        elif self.metric == 'mahalanobis':
-            distance = self._mahalanobis_distance(test_vector, profile)
-        else:
-            distance = self._euclidean_distance(test_vector, profile)
-
-        # 5. Decision
-        accepted = distance < effective_threshold
-
-        # 6. Confidence Calculation
-        confidence = self._calculate_confidence(distance, effective_threshold)
-
-        details = {
-            'distance': distance,
-            'threshold': effective_threshold,
-            'margin': effective_threshold - distance,
-            'confidence': confidence,
-            'metric': self.metric
-        }
-
-        return distance, accepted, details
-
-    def _euclidean_distance(self, test_vector, profile):
-        mean_vector = profile['mean']
-        test_vector = np.array(test_vector)
-        # Using linalg.norm is standard for Euclidean
-        return np.linalg.norm(test_vector - mean_vector)
-
-    def _manhattan_distance(self, test_vector, profile):
-        mean_vector = profile['mean']
-        test_vector = np.array(test_vector)
-        # Sum of absolute differences (often better for outlier rejection)
-        return np.sum(np.abs(test_vector - mean_vector))
-
-    def _mahalanobis_distance(self, test_vector, profile):
-        mean_vector = profile['mean']
-        cov_matrix = profile.get('cov_matrix')
-        test_vector = np.array(test_vector)
-
-        # Safety Fallback: If covariance is missing or wrong shape, use Euclidean
-        if cov_matrix is None or len(cov_matrix) != len(test_vector):
-            return self._euclidean_distance(test_vector, profile)
-
-        try:
-            # Stronger regularization (1e-4) to prevent math errors
-            cov_matrix_reg = cov_matrix + np.eye(cov_matrix.shape[0]) * 1e-4
-            cov_inv = np.linalg.inv(cov_matrix_reg)
-            diff = test_vector - mean_vector
-            distance = np.sqrt(diff.T @ cov_inv @ diff)
-            return distance
-        except Exception:
-            return self._euclidean_distance(test_vector, profile)
-
-    def _calculate_confidence(self, distance, threshold):
-        if threshold == 0: return 0.0
-        
-        if distance < threshold:
-            # Accepted logic
-            ratio = distance / threshold
-            return 1.0 - ratio
-        else:
-            # Rejected logic
-            ratio = threshold / distance
-            return 1.0 - ratio
-
-    def authenticate_with_multiple_metrics(self, test_vector, profile):
-        """Robust authentication with voting."""
-        profile = self._normalize_profile(profile)
-        
         results = {}
-        # We prioritize Euclidean and Manhattan for reliability
-        metrics = ['euclidean', 'manhattan', 'mahalanobis']
 
-        # 1. Collect results for each metric
-        for metric in metrics:
-            original_metric = self.metric
-            self.metric = metric
-            
-            # This calls the updated authenticate() with the new thresholds
-            distance, accepted, details = self.authenticate(test_vector, profile)
-            
-            results[metric] = {
-                'distance': distance,
-                'accepted': accepted,
-                'confidence': details['confidence']
-            }
-            self.metric = original_metric
+        # ── 1. Euclidean (z-score normalized) ────────────────────────────────
+        eu_dist = self._euclidean_z(test_vector, profile)
+        eu_acc  = eu_dist < self.Z_THRESHOLD
+        eu_conf = self._confidence(eu_dist)
+        results['euclidean'] = {'distance': eu_dist, 'accepted': eu_acc, 'confidence': eu_conf}
+        print(f"  [EUCLIDEAN-Z] dist={eu_dist:.3f} threshold={self.Z_THRESHOLD} accepted={eu_acc} conf={eu_conf:.2f}")
 
-        # 2. Calculate Statistics (BEFORE adding non-dict items to 'results')
-        # We explicitly look at the 'metrics' keys only to avoid errors
-        confidence_values = [results[m]['confidence'] for m in metrics]
-        avg_confidence = np.mean(confidence_values)
-        
-        votes = sum(1 for m in metrics if results[m]['accepted'])
-        
-        # 3. Final Decision Logic
-        if results['euclidean']['accepted'] and votes >= 1:
-            final_decision = True
-        else:
-            final_decision = votes >= 2
+        # ── 2. Manhattan (z-score normalized) ────────────────────────────────
+        ma_dist = self._manhattan_z(test_vector, profile)
+        ma_acc  = ma_dist < self.Z_THRESHOLD
+        ma_conf = self._confidence(ma_dist)
+        results['manhattan'] = {'distance': ma_dist, 'accepted': ma_acc, 'confidence': ma_conf}
+        print(f"  [MANHATTAN-Z] dist={ma_dist:.3f} threshold={self.Z_THRESHOLD} accepted={ma_acc} conf={ma_conf:.2f}")
 
-        # 4. NOW we can add the summary data safely
+        # ── 3. DTW ────────────────────────────────────────────────────────────
+        dtw_accepted  = False
+        dtw_confidence = 0.0
+        if test_raw_seq is not None and 'raw_sequences' in profile:
+            dtw_dist      = self._dtw_distance(test_raw_seq, profile['raw_sequences'])
+            DTW_THRESHOLD = 45.0   # ms per element
+            dtw_accepted  = dtw_dist < DTW_THRESHOLD
+            dtw_confidence = max(0.0, 1.0 - (dtw_dist / DTW_THRESHOLD))
+            results['dtw'] = {'distance': dtw_dist, 'accepted': dtw_accepted, 'confidence': dtw_confidence}
+            print(f"  [DTW] dist={dtw_dist:.3f} threshold={DTW_THRESHOLD} accepted={dtw_accepted} conf={dtw_confidence:.2f}")
+
+        # ── 4. SVM ────────────────────────────────────────────────────────────
+        svm_accepted   = False
+        svm_confidence = 0.0
+        if 'svm_model_b64' in profile and profile['svm_model_b64']:
+            try:
+                svm_model = pickle.loads(base64.b64decode(profile['svm_model_b64']))
+                score     = svm_model.decision_function([test_vector])[0]
+
+                # offset_[0] is the theoretical worst score (corresponds to 0%)
+                max_penalty = abs(float(getattr(svm_model, 'offset_', [-0.3])[0]))
+                if max_penalty <= 0:
+                    max_penalty = 0.3
+
+                svm_confidence = float(np.clip(1.0 + (score / max_penalty), 0.0, 1.0))
+                svm_accepted   = svm_confidence > 0.5
+                results['svm'] = {'distance': -score, 'accepted': svm_accepted, 'confidence': svm_confidence}
+                print(f"  [SVM] raw_score={score:.4f} offset={max_penalty:.4f} conf={svm_confidence:.2f} accepted={svm_accepted}")
+            except Exception as e:
+                print(f"  [SVM] error: {e}")
+
+        # ── 5. Voting ─────────────────────────────────────────────────────────
+        # Collect all active model votes
+        active_models = ['euclidean', 'manhattan']
+        if 'dtw' in results:
+            active_models.append('dtw')
+        if 'svm' in results:
+            active_models.append('svm')
+
+        total_votes   = sum(1 for m in active_models if results[m]['accepted'])
+        required_votes = max(2, len(active_models) - 1)   # majority: need n-1 of n
+        final_decision = total_votes >= required_votes
+
+        # ── 6. Summary ────────────────────────────────────────────────────────
+        all_conf = [results[m]['confidence'] for m in active_models]
         results['final_decision'] = final_decision
-        results['avg_confidence'] = avg_confidence
-        results['votes'] = f"{votes}/3"
+        results['avg_confidence'] = float(np.mean(all_conf))
+        results['votes'] = f"{total_votes}/{len(active_models)}"
 
+        print(f"  => FINAL: {total_votes}/{len(active_models)} votes — {'GRANTED' if final_decision else 'DENIED'}")
         return results

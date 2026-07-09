@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Enhanced Firebase Database Module
 ==================================
@@ -8,6 +9,9 @@ Provides complete user management:
 4. List all users
 5. Delete users
 """
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -20,11 +24,32 @@ if not firebase_admin._apps:
     cred = credentials.Certificate("serviceAccountKey.json")
     firebase_admin.initialize_app(cred)
 
-db = firestore.client()
+db = firestore.client(database_id="morse-auth")
 
 
 def save_user_profile(user_id, username, password_info, profile):
     try:
+        def to_list(v):
+            """Convert numpy arrays/matrices to plain Python lists for Firestore."""
+            import numpy as np
+            if isinstance(v, np.ndarray):
+                return v.tolist()
+            if isinstance(v, list):
+                return [to_list(i) for i in v]
+            if isinstance(v, (np.integer,)):
+                return int(v)
+            if isinstance(v, (np.floating,)):
+                return float(v)
+            return v
+
+        import numpy as np
+        # Firestore does NOT support nested arrays.
+        # Flatten cov_matrix from 32x32 -> 1024 flat list, store shape alongside.
+        cov = profile.get("cov_matrix", [])
+        cov_arr = np.array(cov)
+        cov_flat = cov_arr.flatten().tolist() if cov_arr.ndim == 2 else to_list(cov)
+        cov_shape = list(cov_arr.shape) if cov_arr.ndim == 2 else []
+
         data = {
             "user_id": user_id,
             "username": username,
@@ -33,20 +58,30 @@ def save_user_profile(user_id, username, password_info, profile):
             "pattern_count": password_info["pattern_count"],
             "total_elements": password_info["total_elements"],
             "biometric_profile": {
-                "mean_vector": profile["mean_vector"],   # ✅ correct
-                "sample_count": profile["sample_count"],
-                "consistency_score": profile["consistency_score"]
+                # Canonical field names (used by matcher)
+                "mean": to_list(profile.get("mean", profile.get("mean_vector", []))),
+                "std": to_list(profile.get("std", profile.get("std_vector", []))),
+                "cov_matrix_flat": cov_flat,
+                "cov_matrix_shape": cov_shape,
+                "recommended_threshold": float(profile.get("recommended_threshold", 65.0)),
+                # Legacy alias
+                "mean_vector": to_list(profile.get("mean", profile.get("mean_vector", []))),
+                # Metadata
+                "sample_count": int(profile.get("sample_count", 0)),
+                "consistency_score": float(profile.get("consistency_score", 0.0)),
+                "raw_sequences": profile.get("raw_sequences", []),
+                "svm_model_b64": profile.get("svm_model_b64", "")
             },
             "created_at": datetime.utcnow().isoformat(),
             "last_updated": datetime.utcnow().isoformat()
         }
 
         db.collection("morse_auth_profiles").document(username).set(data)
-        print(f"✅ Profile saved to Firebase for user: {username}")
+        print(f"Profile saved to Firebase for user: {username}")
         return True
 
     except Exception as e:
-        print(f"❌ Error saving profile: {e}")
+        print(f"Error saving profile: {e}")
         return False
 
 
