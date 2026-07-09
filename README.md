@@ -11,7 +11,7 @@ The primary goal is to verify a user's identity securely and deterministically w
 ## Architecture
 The module is strictly separated into focused, single-responsibility components adhering to SOLID principles:
 - **Models:** Immutable domain dataclasses (`RecoveryProfile`, `RecoveryQuestion`, `VerificationResult`) and Enums (`SessionStatus`).
-- **Validators:** Pure functions enforcing business rules (e.g., question limits, answer presence, duplication prevention).
+- **Validators:** Pure functions enforcing business rules (e.g., exact question count, answer presence, duplication prevention).
 - **Selector:** Non-deterministic subset selection logic for dynamic challenge generation.
 - **Normalisation & Hashing:** Pipeline enforcing Unicode NFKC canonicalisation, case-folding, and whitespace collapsing prior to SHA-256 hashing.
 - **Verifier:** A pure, constant-time verification engine that avoids early-exit timing leaks.
@@ -40,7 +40,7 @@ recovery/
 ## Public API
 The module exports the following components via `recovery.__init__`:
 - **Models:** `RecoveryQuestion`, `RecoveryProfile`, `RecoverySession`, `VerificationResult`, `QuestionType`, `SessionStatus`
-- **Constants:** `MIN_QUESTIONS` (4), `MAX_QUESTIONS` (8), `MAX_RECOVERY_ATTEMPTS` (3)
+- **Constants:** `REQUIRED_QUESTIONS` (6), `MAX_RECOVERY_ATTEMPTS` (3)
 - **Utilities:** `normalize_answer`, `hash_answer`, `validate_profile_input`, `select_questions`
 - **Storage:** `AbstractStorage`, `InMemoryStorage`
 - **Factory:** `RecoveryManager`, `create_recovery_manager`
@@ -52,8 +52,8 @@ The module exports the following components via `recovery.__init__`:
 - **Strict Lockouts:** Sessions lock out automatically after `MAX_RECOVERY_ATTEMPTS` (default: 3).
 
 ## Recovery Workflow
-1. **Profile Creation:** The user sets up 4 to 8 questions and answers. The system normalises and hashes the answers, persisting them via the storage interface.
-2. **Session Start:** The user requests recovery. The system randomly selects a subset of questions (e.g., 3 out of 5) and creates an `ACTIVE` recovery session.
+1. **Profile Creation:** The user sets up exactly 6 custom recovery questions and answers. The system normalises and hashes the answers, persisting them via the storage interface.
+2. **Session Start:** The user requests recovery. The system randomly selects 3 of the 6 stored questions and creates an `ACTIVE` recovery session.
 3. **Challenge/Response:** The selected questions (prompts only) are presented to the user.
 4. **Verification:** The user submits their answers. The engine verifies them in constant time.
 5. **Outcome:**
@@ -68,23 +68,29 @@ from recovery import create_recovery_manager, RecoveryQuestion, QuestionType
 # 1. Initialize the manager (uses InMemoryStorage by default)
 manager = create_recovery_manager()
 
-# 2. Create a profile
+# 2. Create a profile with exactly 6 questions
 questions = [
     RecoveryQuestion("q1", "What is your pet's name?"),
     RecoveryQuestion("q2", "In what city were you born?"),
     RecoveryQuestion("q3", "What is your favorite book?"),
     RecoveryQuestion("q4", "What was your first car?"),
+    RecoveryQuestion("q5", "What is your mother's maiden name?"),
+    RecoveryQuestion("q6", "What was the name of your first school?"),
 ]
-manager.create_profile("user_123", questions, ["Fido", "London", "Dune", "Honda"])
+manager.create_profile(
+    "user_123", questions,
+    ["Fido", "London", "Dune", "Honda", "Smith", "Greenwood"],
+)
 
-# 3. Start a recovery session
+# 3. Start a recovery session (3 questions randomly selected from 6)
 session, selected_questions = manager.start_recovery("user_123")
 print([q.prompt for q in selected_questions])
 
 # 4. Verify user answers
 user_answers = {
     selected_questions[0].question_id: "Fido",
-    selected_questions[1].question_id: "London"
+    selected_questions[1].question_id: "London",
+    selected_questions[2].question_id: "Dune",
 }
 result = manager.verify_answers(session.session_id, user_answers)
 

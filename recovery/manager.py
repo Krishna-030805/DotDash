@@ -75,7 +75,7 @@ class RecoveryManager:
         user_id : str
             The user to associate the profile with.
         questions : Sequence[RecoveryQuestion]
-            Ordered questions (4-8 items).
+            Ordered questions (exactly 6 items).
         raw_answers : Sequence[str]
             Plain-text answers (will be normalised and hashed).
 
@@ -87,7 +87,7 @@ class RecoveryManager:
         Raises
         ------
         InvalidQuestionCountError
-            If the number of questions is outside the 4-8 range.
+            If the number of questions is not exactly 6.
         EmptyQuestionError
             If any question prompt is blank.
         DuplicateQuestionError

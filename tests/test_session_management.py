@@ -1,17 +1,15 @@
 """Unit tests for the Recovery Session Management layer.
 
 Tests cover:
- 1. 4-question profile → 2 selected
- 2. 5-question profile → 3 selected
- 3. 8-question profile → 3 selected
- 4. No duplicate questions in selection
- 5. Session stored correctly
- 6. Session retrieved correctly
- 7. Session deletion (cancel)
- 8. Selection varies between sessions
- 9. start_recovery raises ProfileNotFoundError for missing user
-10. cancel_session raises SessionNotFoundError for bad ID
-11. Returned questions contain only prompts, never hashes
+ 1. 6-question profile → 3 selected
+ 2. No duplicate questions in selection
+ 3. Session stored correctly
+ 4. Session retrieved correctly
+ 5. Session deletion (cancel)
+ 6. Selection varies between sessions
+ 7. start_recovery raises ProfileNotFoundError for missing user
+ 8. cancel_session raises SessionNotFoundError for bad ID
+ 9. Returned questions contain only prompts, never hashes
 """
 
 from recovery import (
@@ -41,7 +39,7 @@ def _make_answers(n: int):
     return [f"answer {i}" for i in range(1, n + 1)]
 
 
-def _setup_profile(mgr: RecoveryManager, user_id: str, n_questions: int):
+def _setup_profile(mgr: RecoveryManager, user_id: str, n_questions: int = 6):
     """Create and persist a profile with *n_questions* questions."""
     qs = _make_questions(n_questions)
     ans = _make_answers(n_questions)
@@ -50,57 +48,19 @@ def _setup_profile(mgr: RecoveryManager, user_id: str, n_questions: int):
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 
-def test_4_questions_selects_2():
-    mgr = create_recovery_manager()
-    _setup_profile(mgr, "user4", 4)
-
-    session, selected = mgr.start_recovery("user4")
-    assert len(selected) == 2, f"Expected 2 selected, got {len(selected)}"
-    assert len(session.selected_question_ids) == 2
-    print("[PASS] 4-question profile -> 2 selected")
-
-
-def test_5_questions_selects_3():
-    mgr = create_recovery_manager()
-    _setup_profile(mgr, "user5", 5)
-
-    session, selected = mgr.start_recovery("user5")
-    assert len(selected) == 3, f"Expected 3 selected, got {len(selected)}"
-    assert len(session.selected_question_ids) == 3
-    print("[PASS] 5-question profile -> 3 selected")
-
-
-def test_8_questions_selects_3():
-    mgr = create_recovery_manager()
-    _setup_profile(mgr, "user8", 8)
-
-    session, selected = mgr.start_recovery("user8")
-    assert len(selected) == 3, f"Expected 3 selected, got {len(selected)}"
-    assert len(session.selected_question_ids) == 3
-    print("[PASS] 8-question profile -> 3 selected")
-
-
 def test_6_questions_selects_3():
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user6", 6)
+    _setup_profile(mgr, "user6")
 
     session, selected = mgr.start_recovery("user6")
-    assert len(selected) == 3
+    assert len(selected) == 3, f"Expected 3 selected, got {len(selected)}"
+    assert len(session.selected_question_ids) == 3
     print("[PASS] 6-question profile -> 3 selected")
-
-
-def test_7_questions_selects_3():
-    mgr = create_recovery_manager()
-    _setup_profile(mgr, "user7", 7)
-
-    session, selected = mgr.start_recovery("user7")
-    assert len(selected) == 3
-    print("[PASS] 7-question profile -> 3 selected")
 
 
 def test_no_duplicate_questions_in_selection():
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user_dup", 8)
+    _setup_profile(mgr, "user_dup")
 
     # Run multiple times to check for duplicates.
     for _ in range(20):
@@ -113,7 +73,7 @@ def test_no_duplicate_questions_in_selection():
 
 def test_session_stored_correctly():
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user_store", 4)
+    _setup_profile(mgr, "user_store")
 
     session, _ = mgr.start_recovery("user_store")
 
@@ -123,13 +83,13 @@ def test_session_stored_correctly():
     assert session.attempt_count == 0
     assert session.created_at is not None
     assert session.completed_at is None
-    assert len(session.selected_question_ids) == 2
+    assert len(session.selected_question_ids) == 3
     print("[PASS] Session fields stored correctly")
 
 
 def test_session_retrieved_correctly():
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user_get", 5)
+    _setup_profile(mgr, "user_get")
 
     session, _ = mgr.start_recovery("user_get")
     retrieved = mgr.get_session(session.session_id)
@@ -150,7 +110,7 @@ def test_get_session_returns_none_for_missing():
 
 def test_cancel_session():
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user_cancel", 4)
+    _setup_profile(mgr, "user_cancel")
 
     session, _ = mgr.start_recovery("user_cancel")
     sid = session.session_id
@@ -184,7 +144,7 @@ def test_start_recovery_no_profile():
 def test_selection_varies_between_sessions():
     """Run start_recovery many times and verify that selections vary."""
     mgr = create_recovery_manager()
-    _setup_profile(mgr, "user_vary", 8)
+    _setup_profile(mgr, "user_vary")
 
     selections = set()
     for _ in range(30):
@@ -192,7 +152,7 @@ def test_selection_varies_between_sessions():
         ids = tuple(sorted(q.question_id for q in selected))
         selections.add(ids)
 
-    # With 8 questions choosing 3, there are C(8,3)=56 combinations.
+    # With 6 questions choosing 3, there are C(6,3)=20 combinations.
     # After 30 runs, we should see at least 2 distinct selections.
     assert len(selections) > 1, (
         f"Expected varied selections but only got: {selections}"
@@ -204,7 +164,7 @@ def test_returned_questions_have_prompts_no_hashes():
     """Ensure the returned selected questions contain prompts but the
     return value itself never exposes answer hashes."""
     mgr = create_recovery_manager()
-    profile = _setup_profile(mgr, "user_safe", 4)
+    _setup_profile(mgr, "user_safe")
 
     session, selected = mgr.start_recovery("user_safe")
 
@@ -221,11 +181,7 @@ def test_returned_questions_have_prompts_no_hashes():
 
 
 if __name__ == "__main__":
-    test_4_questions_selects_2()
-    test_5_questions_selects_3()
-    test_8_questions_selects_3()
     test_6_questions_selects_3()
-    test_7_questions_selects_3()
     test_no_duplicate_questions_in_selection()
     test_session_stored_correctly()
     test_session_retrieved_correctly()

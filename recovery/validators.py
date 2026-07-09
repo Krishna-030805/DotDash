@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from .models import MIN_QUESTIONS, MAX_QUESTIONS, RecoveryQuestion
+from .models import REQUIRED_QUESTIONS, RecoveryQuestion
 from .exceptions import (
     DuplicateQuestionError,
     EmptyQuestionError,
@@ -26,7 +26,7 @@ from .exceptions import (
 # ── Individual validators ───────────────────────────────────────────────────
 
 def validate_question_count(questions: Sequence[RecoveryQuestion]) -> None:
-    """Raise :class:`InvalidQuestionCountError` if the count is out of range.
+    """Raise :class:`InvalidQuestionCountError` if the count is not exactly 6.
 
     Parameters
     ----------
@@ -36,17 +36,12 @@ def validate_question_count(questions: Sequence[RecoveryQuestion]) -> None:
     Raises
     ------
     InvalidQuestionCountError
-        If ``len(questions)`` is less than ``MIN_QUESTIONS`` or greater than
-        ``MAX_QUESTIONS``.
+        If ``len(questions)`` is not exactly ``REQUIRED_QUESTIONS``.
     """
     count = len(questions)
-    if count < MIN_QUESTIONS:
+    if count != REQUIRED_QUESTIONS:
         raise InvalidQuestionCountError(
-            f"At least {MIN_QUESTIONS} questions are required, got {count}."
-        )
-    if count > MAX_QUESTIONS:
-        raise InvalidQuestionCountError(
-            f"At most {MAX_QUESTIONS} questions are allowed, got {count}."
+            f"Exactly {REQUIRED_QUESTIONS} questions are required, got {count}."
         )
 
 

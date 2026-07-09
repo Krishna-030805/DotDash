@@ -18,11 +18,8 @@ from enum import Enum, auto
 from typing import Optional
 
 # ── Constants ───────────────────────────────────────────────────────────────
-MIN_QUESTIONS: int = 4
-"""Minimum number of questions a recovery profile must contain."""
-
-MAX_QUESTIONS: int = 8
-"""Maximum number of questions a recovery profile may contain."""
+REQUIRED_QUESTIONS: int = 6
+"""Exact number of questions every recovery profile must contain."""
 
 MAX_RECOVERY_ATTEMPTS: int = 3
 """Maximum verification attempts per recovery session before lockout."""
@@ -111,7 +108,7 @@ class RecoveryProfile:
     user_id : str
         Identifier of the owning user.
     questions : tuple[RecoveryQuestion, ...]
-        Ordered sequence of questions (4–8 items).
+        Ordered sequence of questions (exactly 6 items).
     answer_hashes : tuple[str, ...]
         SHA-256 hex digests of each normalised answer, positionally matched
         to ``questions``.
@@ -132,10 +129,10 @@ class RecoveryProfile:
             raise ValueError("user_id must be a non-empty string.")
 
         q_count = len(self.questions)
-        if not (MIN_QUESTIONS <= q_count <= MAX_QUESTIONS):
+        if q_count != REQUIRED_QUESTIONS:
             raise ValueError(
-                f"A recovery profile must have between {MIN_QUESTIONS} and "
-                f"{MAX_QUESTIONS} questions, got {q_count}."
+                f"A recovery profile must have exactly {REQUIRED_QUESTIONS} "
+                f"questions, got {q_count}."
             )
 
         if len(self.answer_hashes) != q_count:

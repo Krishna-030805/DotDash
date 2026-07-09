@@ -10,7 +10,7 @@ class RecoveryError(Exception):
 
 
 class InvalidQuestionCountError(RecoveryError):
-    """Raised when a profile has fewer than MIN or more than MAX questions."""
+    """Raised when a profile does not have exactly REQUIRED_QUESTIONS questions."""
 
 
 class SessionNotFoundError(RecoveryError):

@@ -3,7 +3,7 @@
 Public API
 ----------
 Constants:
-    MIN_QUESTIONS, MAX_QUESTIONS, MAX_RECOVERY_ATTEMPTS
+    REQUIRED_QUESTIONS, MAX_RECOVERY_ATTEMPTS
 
 Enums:
     QuestionType, SessionStatus
@@ -28,8 +28,7 @@ Manager:
 """
 
 from .models import (
-    MIN_QUESTIONS,
-    MAX_QUESTIONS,
+    REQUIRED_QUESTIONS,
     MAX_RECOVERY_ATTEMPTS,
     QuestionType,
     SessionStatus,
@@ -48,8 +47,7 @@ from .question_selector import select_questions
 
 __all__ = [
     # Constants
-    "MIN_QUESTIONS",
-    "MAX_QUESTIONS",
+    "REQUIRED_QUESTIONS",
     "MAX_RECOVERY_ATTEMPTS",
     # Enums
     "QuestionType",

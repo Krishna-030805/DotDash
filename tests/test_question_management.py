@@ -1,9 +1,9 @@
 """Smoke tests for the Question Management layer.
 
 Tests:
-1. Happy path — create, get, delete profile
-2. Reject < 4 questions
-3. Reject > 8 questions
+1. Happy path — create, get, delete profile (6 questions)
+2. Reject 5 questions (too few)
+3. Reject 7 questions (too many)
 4. Reject duplicate questions
 5. Reject empty question prompts
 6. Reject empty answers
@@ -46,17 +46,17 @@ def make_answers(n: int):
 
 def test_happy_path():
     mgr = create_recovery_manager()
-    qs = make_questions(4)
-    ans = make_answers(4)
+    qs = make_questions(6)
+    ans = make_answers(6)
 
     # Create
     profile = mgr.create_profile("user1", qs, ans)
     assert profile.user_id == "user1"
-    assert len(profile.questions) == 4
-    assert len(profile.answer_hashes) == 4
+    assert len(profile.questions) == 6
+    assert len(profile.answer_hashes) == 6
     assert profile.created_at is not None
     assert profile.updated_at is None
-    print("[PASS] create_profile — happy path (4 questions)")
+    print("[PASS] create_profile — happy path (6 questions)")
 
     # Get
     loaded = mgr.get_profile("user1")
@@ -75,31 +75,24 @@ def test_happy_path():
     print("[PASS] delete_profile — profile removed")
 
 
-def test_max_questions():
-    mgr = create_recovery_manager()
-    profile = mgr.create_profile("user8", make_questions(8), make_answers(8))
-    assert len(profile.questions) == 8
-    print("[PASS] create_profile — happy path (8 questions)")
-
-
-def test_too_few_questions():
+def test_reject_5_questions():
     mgr = create_recovery_manager()
     try:
-        mgr.create_profile("user_bad", make_questions(3), make_answers(3))
+        mgr.create_profile("user_bad", make_questions(5), make_answers(5))
         assert False, "Should have raised"
     except InvalidQuestionCountError as e:
-        assert "4" in str(e)
-        print(f"[PASS] reject < 4 questions: {e}")
+        assert "6" in str(e)
+        print(f"[PASS] reject 5 questions: {e}")
 
 
-def test_too_many_questions():
+def test_reject_7_questions():
     mgr = create_recovery_manager()
     try:
-        mgr.create_profile("user_bad", make_questions(9), make_answers(9))
+        mgr.create_profile("user_bad", make_questions(7), make_answers(7))
         assert False, "Should have raised"
     except InvalidQuestionCountError as e:
-        assert "8" in str(e)
-        print(f"[PASS] reject > 8 questions: {e}")
+        assert "6" in str(e)
+        print(f"[PASS] reject 7 questions: {e}")
 
 
 def test_duplicate_questions():
@@ -109,9 +102,11 @@ def test_duplicate_questions():
         RecoveryQuestion(question_id="q2", prompt="  what is your pet's name?  "),
         RecoveryQuestion(question_id="q3", prompt="Favourite colour?"),
         RecoveryQuestion(question_id="q4", prompt="Birth city?"),
+        RecoveryQuestion(question_id="q5", prompt="First school?"),
+        RecoveryQuestion(question_id="q6", prompt="Best friend?"),
     ]
     try:
-        mgr.create_profile("user_dup", qs, make_answers(4))
+        mgr.create_profile("user_dup", qs, make_answers(6))
         assert False, "Should have raised"
     except DuplicateQuestionError as e:
         print(f"[PASS] reject duplicate questions: {e}")
@@ -119,8 +114,8 @@ def test_duplicate_questions():
 
 def test_empty_answers():
     mgr = create_recovery_manager()
-    qs = make_questions(4)
-    answers = ["answer1", "   ", "answer3", "answer4"]
+    qs = make_questions(6)
+    answers = ["answer1", "   ", "answer3", "answer4", "answer5", "answer6"]
     try:
         mgr.create_profile("user_empty", qs, answers)
         assert False, "Should have raised"
@@ -131,7 +126,7 @@ def test_empty_answers():
 def test_mismatched_count():
     mgr = create_recovery_manager()
     try:
-        mgr.create_profile("user_mis", make_questions(4), make_answers(5))
+        mgr.create_profile("user_mis", make_questions(6), make_answers(5))
         assert False, "Should have raised"
     except InvalidAnswerError as e:
         print(f"[PASS] reject mismatched answer count: {e}")
@@ -149,12 +144,12 @@ def test_delete_nonexistent():
 def test_normalisation_pipeline():
     """Verify that '  My   Pet  ' and 'my pet' hash to the same value."""
     mgr = create_recovery_manager()
-    qs = make_questions(4)
+    qs = make_questions(6)
 
-    p1 = mgr.create_profile("u1", qs, ["  My   Pet  ", "a2", "a3", "a4"])
+    p1 = mgr.create_profile("u1", qs, ["  My   Pet  ", "a2", "a3", "a4", "a5", "a6"])
     mgr.delete_profile("u1")
 
-    p2 = mgr.create_profile("u2", qs, ["my pet", "a2", "a3", "a4"])
+    p2 = mgr.create_profile("u2", qs, ["my pet", "a2", "a3", "a4", "a5", "a6"])
 
     assert p1.answer_hashes[0] == p2.answer_hashes[0], (
         "Normalised hashes should match"
@@ -164,9 +159,8 @@ def test_normalisation_pipeline():
 
 if __name__ == "__main__":
     test_happy_path()
-    test_max_questions()
-    test_too_few_questions()
-    test_too_many_questions()
+    test_reject_5_questions()
+    test_reject_7_questions()
     test_duplicate_questions()
     test_empty_answers()
     test_mismatched_count()

@@ -22,10 +22,9 @@ Tests cover:
 19. VerificationResult never exposes hashes
 20. Message never reveals which answer failed
 21. One wrong answer fails the entire verification
-22. 5-question profile verification (3 selected)
-23. 8-question profile verification (3 selected)
-24. Unicode NFKC normalisation (full-width characters)
-25. Unicode NFKC normalisation (compatibility equivalence)
+22. 6-question profile verification (3 selected)
+23. Unicode NFKC normalisation (full-width characters)
+24. Unicode NFKC normalisation (compatibility equivalence)
 """
 
 from recovery import (
@@ -61,7 +60,7 @@ def _make_answers(n):
     return [f"answer {i}" for i in range(1, n + 1)]
 
 
-def _setup_and_start(mgr, user_id, n_questions):
+def _setup_and_start(mgr, user_id, n_questions=6):
     """Create a profile and start a recovery session.
 
     Returns (session, selected_questions, profile).
@@ -95,7 +94,7 @@ def _build_wrong_answers(selected_questions):
 
 def test_correct_answers_verified():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_ok", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_ok")
 
     answers = _build_correct_answers(selected)
     result = mgr.verify_answers(session.session_id, answers)
@@ -109,7 +108,7 @@ def test_correct_answers_verified():
 def test_first_failed_attempt_stays_active():
     """First wrong attempt: session stays ACTIVE, retries available."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_f1", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_f1")
 
     wrong = _build_wrong_answers(selected)
     result = mgr.verify_answers(session.session_id, wrong)
@@ -129,7 +128,7 @@ def test_first_failed_attempt_stays_active():
 def test_second_failed_attempt_stays_active():
     """Second wrong attempt: session still ACTIVE."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_f2", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_f2")
 
     wrong = _build_wrong_answers(selected)
 
@@ -152,7 +151,7 @@ def test_second_failed_attempt_stays_active():
 def test_final_failed_attempt_locks_out():
     """Third wrong attempt (MAX_RECOVERY_ATTEMPTS): session -> FAILED."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_f3", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_f3")
 
     wrong = _build_wrong_answers(selected)
 
@@ -179,7 +178,7 @@ def test_final_failed_attempt_locks_out():
 def test_success_after_one_failed_attempt():
     """Correct answers on attempt 2 after failing attempt 1."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_retry", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_retry")
 
     wrong = _build_wrong_answers(selected)
     correct = _build_correct_answers(selected)
@@ -207,7 +206,7 @@ def test_success_after_one_failed_attempt():
 def test_case_insensitive_verification():
     """'ANSWER 1' should match 'answer 1' after normalisation."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_case", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_case")
 
     answers = {}
     for q in selected:
@@ -224,7 +223,7 @@ def test_case_insensitive_verification():
 def test_extra_whitespace_normalisation():
     """'  answer   1  ' should match 'answer 1' after normalisation."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_ws", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_ws")
 
     answers = {}
     for q in selected:
@@ -241,7 +240,7 @@ def test_extra_whitespace_normalisation():
 def test_mixed_case_and_whitespace():
     """'  AnSwEr   1  ' should match 'answer 1'."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_mix", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_mix")
 
     answers = {}
     for q in selected:
@@ -259,8 +258,8 @@ def test_unicode_fullwidth_normalisation():
     mgr = create_recovery_manager()
 
     # Create profile with ASCII answer "answer 1".
-    qs = _make_questions(4)
-    mgr.create_profile("user_fw", qs, _make_answers(4))
+    qs = _make_questions(6)
+    mgr.create_profile("user_fw", qs, _make_answers(6))
 
     session, selected = mgr.start_recovery("user_fw")
 
@@ -304,7 +303,7 @@ def test_unicode_compatibility_normalisation():
 def test_attempt_counter_increments():
     """Verify that attempt_count increases with each verification."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_cnt", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_cnt")
 
     wrong = _build_wrong_answers(selected)
 
@@ -323,7 +322,7 @@ def test_attempt_counter_increments():
 
 def test_session_status_verified():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_sv", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_sv")
 
     answers = _build_correct_answers(selected)
     mgr.verify_answers(session.session_id, answers)
@@ -335,7 +334,7 @@ def test_session_status_verified():
 
 def test_session_status_failed_after_max_attempts():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_sf", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_sf")
 
     wrong = _build_wrong_answers(selected)
     for _ in range(MAX_RECOVERY_ATTEMPTS):
@@ -348,7 +347,7 @@ def test_session_status_failed_after_max_attempts():
 
 def test_completed_at_set_on_verified():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_cv", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_cv")
     assert session.completed_at is None
 
     answers = _build_correct_answers(selected)
@@ -361,7 +360,7 @@ def test_completed_at_set_on_verified():
 
 def test_completed_at_set_on_failed():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_cf", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_cf")
 
     wrong = _build_wrong_answers(selected)
     for _ in range(MAX_RECOVERY_ATTEMPTS):
@@ -374,7 +373,7 @@ def test_completed_at_set_on_failed():
 
 def test_completed_at_not_set_on_non_final_failure():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_cnf", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_cnf")
 
     wrong = _build_wrong_answers(selected)
     mgr.verify_answers(session.session_id, wrong)
@@ -388,7 +387,7 @@ def test_completed_at_not_set_on_non_final_failure():
 
 def test_answer_count_mismatch():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_acm", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_acm")
 
     answers = {selected[0].question_id: "answer 1"}  # only 1 answer
 
@@ -411,7 +410,7 @@ def test_session_not_found():
 
 def test_inactive_session_after_verified():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_iav", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_iav")
 
     answers = _build_correct_answers(selected)
     mgr.verify_answers(session.session_id, answers)
@@ -426,7 +425,7 @@ def test_inactive_session_after_verified():
 
 def test_inactive_session_after_failed():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_iaf", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_iaf")
 
     wrong = _build_wrong_answers(selected)
 
@@ -448,7 +447,7 @@ def test_inactive_session_after_failed():
 
 def test_result_never_exposes_hashes():
     mgr = create_recovery_manager()
-    session, selected, profile = _setup_and_start(mgr, "user_sec", 4)
+    session, selected, profile = _setup_and_start(mgr, "user_sec")
 
     answers = _build_correct_answers(selected)
     result = mgr.verify_answers(session.session_id, answers)
@@ -462,7 +461,7 @@ def test_result_never_exposes_hashes():
 
 def test_message_never_reveals_which_answer_failed():
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_msg", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_msg")
 
     wrong = _build_wrong_answers(selected)
     result = mgr.verify_answers(session.session_id, wrong)
@@ -478,7 +477,7 @@ def test_message_never_reveals_which_answer_failed():
 def test_one_wrong_answer_fails_all():
     """Even if only one answer is wrong, verification should fail."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_1w", 4)
+    session, selected, _ = _setup_and_start(mgr, "user_1w")
 
     answers = _build_correct_answers(selected)
     first_qid = selected[0].question_id
@@ -491,12 +490,12 @@ def test_one_wrong_answer_fails_all():
     print("[PASS] One wrong answer fails the entire verification")
 
 
-# -- Multi-profile-size tests ------------------------------------------------
+# -- Profile-size tests ------------------------------------------------------
 
-def test_5_question_profile_verification():
-    """Verify with a 5-question profile (3 selected)."""
+def test_6_question_profile_verification():
+    """Verify with a 6-question profile (3 selected)."""
     mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_5q", 5)
+    session, selected, _ = _setup_and_start(mgr, "user_6q")
 
     assert len(selected) == 3
     answers = _build_correct_answers(selected)
@@ -504,21 +503,7 @@ def test_5_question_profile_verification():
 
     assert result.identity_verified is True
     assert result.session_status == SessionStatus.VERIFIED
-    print("[PASS] 5-question profile verification (3 selected)")
-
-
-def test_8_question_profile_verification():
-    """Verify with an 8-question profile (3 selected)."""
-    mgr = create_recovery_manager()
-    session, selected, _ = _setup_and_start(mgr, "user_8q", 8)
-
-    assert len(selected) == 3
-    answers = _build_correct_answers(selected)
-    result = mgr.verify_answers(session.session_id, answers)
-
-    assert result.identity_verified is True
-    assert result.session_status == SessionStatus.VERIFIED
-    print("[PASS] 8-question profile verification (3 selected)")
+    print("[PASS] 6-question profile verification (3 selected)")
 
 
 if __name__ == "__main__":
@@ -545,6 +530,5 @@ if __name__ == "__main__":
     test_result_never_exposes_hashes()
     test_message_never_reveals_which_answer_failed()
     test_one_wrong_answer_fails_all()
-    test_5_question_profile_verification()
-    test_8_question_profile_verification()
+    test_6_question_profile_verification()
     print("\n=== ALL VERIFICATION TESTS PASSED ===")
