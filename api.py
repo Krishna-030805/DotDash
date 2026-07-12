@@ -123,6 +123,81 @@ def authenticate():
         "results": sanitized_results
     })
 
+# ── Recovery API Endpoints ────────────────────────────────────────────────
+from recovery.interface import create_recovery_manager
+from recovery.firebase_storage import FirebaseStorage
+from recovery.models import RecoveryQuestion, QuestionType
+from recovery.exceptions import RecoveryError
+
+recovery_manager = create_recovery_manager(storage=FirebaseStorage())
+
+@app.route('/api/recovery/setup', methods=['POST'])
+def recovery_setup():
+    data = request.json
+    username = data.get('username')
+    qa_list = data.get('questions', []) # list of dicts: {'prompt': '...', 'answer': '...'}
+    
+    if not username or len(qa_list) != 6:
+        return jsonify({"error": "Username and exactly 6 questions/answers are required"}), 400
+        
+    try:
+        questions = []
+        raw_answers = []
+        for i, qa in enumerate(qa_list):
+            q_id = f"{username}_q{i}"
+            questions.append(RecoveryQuestion(question_id=q_id, prompt=qa['prompt'], question_type=QuestionType.TEXT))
+            raw_answers.append(qa['answer'])
+            
+        recovery_manager.create_profile(user_id=username, questions=questions, raw_answers=raw_answers)
+        return jsonify({"status": "success", "message": "Recovery profile created"})
+    except RecoveryError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/recovery/start', methods=['POST'])
+def recovery_start():
+    data = request.json
+    username = data.get('username')
+    
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+        
+    try:
+        session, selected_questions = recovery_manager.start_recovery(user_id=username)
+        return jsonify({
+            "status": "success",
+            "session_id": session.session_id,
+            "questions": [{"question_id": q.question_id, "prompt": q.prompt} for q in selected_questions]
+        })
+    except RecoveryError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/recovery/verify', methods=['POST'])
+def recovery_verify():
+    data = request.json
+    session_id = data.get('session_id')
+    user_answers = data.get('answers', {}) # dict: {'q_id': 'answer'}
+    
+    if not session_id or not user_answers:
+        return jsonify({"error": "Session ID and answers are required"}), 400
+        
+    try:
+        result = recovery_manager.verify_answers(session_id=session_id, user_answers=user_answers)
+        return jsonify({
+            "status": "success",
+            "identity_verified": result.identity_verified,
+            "session_status": result.session_status.name,
+            "attempt_count": result.attempt_count,
+            "message": result.message
+        })
+    except RecoveryError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     # Run the Flask app on port 5000
     app.run(host='0.0.0.0', port=5000, debug=True)
