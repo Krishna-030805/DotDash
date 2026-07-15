@@ -1,0 +1,39 @@
+# Firebase credentials (CRITICAL: Never commit these keys!)
+serviceAccountKey.json
+new key(working).json
+new key(Working).json
+fresh key.json
+*.json
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python virtual environment
+rhythm_env/
+env/
+venv/
+ENV/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Audio / Recorded sample files (if you don't want to commit recorded test audio)
+*.wav
+
+# Frontend (Node / React / Vite)
+node_modules/
+dist/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache

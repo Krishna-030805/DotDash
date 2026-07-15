@@ -29,7 +29,7 @@ try:
     from rhythm_analyzer import RhythmAnalyzer  # Analyzes rhythm quality
     from morse_codes import MORSE_CODE, get_character_from_morse  # Morse code dictionary
 except ImportError as e:
-    print(f"❌ ERROR: Missing required module - {e}")
+    print(f"ERROR: Missing required module - {e}")
     print("Make sure all backend files are in the same directory!")
     exit(1)
 
@@ -42,7 +42,7 @@ import os
 
 # Firebase configuration
 KEY_PATH = "serviceAccountKey.json"  # Your Firebase service account key
-DB_URL = "URL of your Firebase Realtime Database"  # Your Firebase Realtime Database URL
+DB_URL = "https://morse-code-36b13-default-rtdb.asia-southeast1.firebasedatabase.app/"  # Your Firebase Realtime Database URL
 
 # These environment variables fix connection issues
 os.environ["GOOGLE_CLOUD_DISABLE_GRPC"] = "true"
@@ -56,9 +56,9 @@ if not firebase_admin._apps:
             'databaseURL': DB_URL,
             'httpTimeout': 30
         })
-        print("✅ Firebase Connected Successfully")
+        print("Firebase Connected Successfully")
     except Exception as e:
-        print(f"❌ Firebase Connection Error: {e}")
+        print(f"Firebase Connection Error: {e}")
         print("Check that 'fresh key.json' exists and DATABASE_URL is correct")
 
 
